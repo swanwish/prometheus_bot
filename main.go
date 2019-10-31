@@ -428,9 +428,14 @@ func main() {
 
 	router := gin.Default()
 
+	router.GET("/", rootHandling)
 	router.GET("/ping/:chatid", GET_Handling)
 	router.POST("/alert/:chatid", POST_Handling)
 	router.Run(*listen_addr)
+}
+
+func rootHandling(c *gin.Context) {
+	c.String(http.StatusOK, "OK")
 }
 
 func GET_Handling(c *gin.Context) {
