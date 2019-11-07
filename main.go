@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"html/template"
 	"io"
 	"io/ioutil"
 	"log"
@@ -18,10 +19,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
+	"github.com/swanwish/go-common/logs"
 	"gopkg.in/telegram-bot-api.v4"
 	"gopkg.in/yaml.v2"
-
-	"html/template"
 )
 
 type Alerts struct {
@@ -346,7 +346,7 @@ func telegramBot(bot *tgbotapi.BotAPI) {
 
 func loadTemplate(tmplPath string) *template.Template {
 	// let's read template
-	tmpH, err := template.New(path.Base(tmplPath)).Funcs(funcMap).ParseFiles(cfg.TemplatePath)
+	tmpH, err := template.New(path.Base(tmplPath)).Option("missingkey=zero").Funcs(funcMap).ParseFiles(cfg.TemplatePath)
 
 	if err != nil {
 		log.Fatalf("Problem reading parsing template file: %v", err)
@@ -522,7 +522,7 @@ func AlertFormatStandard(alerts Alerts) string {
 	)
 }
 
-func AlertFormatTemplate(alerts Alerts) string {
+func AlertFormatTemplate(alerts Alerts) (string, error) {
 	var bytesBuff bytes.Buffer
 	var err error
 
@@ -538,11 +538,12 @@ func AlertFormatTemplate(alerts Alerts) string {
 	err = tmpH.Execute(writer, alerts)
 
 	if err != nil {
-		log.Fatalf("Problem with template execution: %v", err)
-		panic(err)
+		log.Printf("Problem with template execution: %v", err)
+		//panic(err)
+		return "", err
 	}
 
-	return bytesBuff.String()
+	return bytesBuff.String(), nil
 }
 
 func POST_Handling(c *gin.Context) {
@@ -561,11 +562,15 @@ func POST_Handling(c *gin.Context) {
 		return
 	}
 
-	binding.JSON.Bind(c.Request, &alerts)
+	err = binding.JSON.Bind(c.Request, &alerts)
+	if err != nil {
+		logs.Errorf("Failed to bind request to json, the error is %#v", err)
+		return
+	}
 
 	s, err := json.Marshal(alerts)
 	if err != nil {
-		log.Print(err)
+		logs.Errorf("Failed to marshal alerts %#v, the error is %#v", alerts, err)
 		return
 	}
 
@@ -577,7 +582,11 @@ func POST_Handling(c *gin.Context) {
 	if cfg.TemplatePath == "" {
 		msgtext = AlertFormatStandard(alerts)
 	} else {
-		msgtext = AlertFormatTemplate(alerts)
+		msgtext, err = AlertFormatTemplate(alerts)
+		if err != nil {
+			logs.Errorf("Failed to format alerts %#v, the error is %#v", alerts, err)
+			return
+		}
 	}
 	for _, subString := range SplitString(msgtext, cfg.SplitMessageBytes) {
 		msg := tgbotapi.NewMessage(chatid, subString)
@@ -594,14 +603,17 @@ func POST_Handling(c *gin.Context) {
 		if err == nil {
 			c.String(http.StatusOK, "telegram msg sent.")
 		} else {
-			log.Printf("Error sending message: %s", err)
+			logs.Errorf("Error sending message: %#v, the error is %#v", msg, err)
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"err":     fmt.Sprint(err),
 				"message": sendmsg,
 				"srcmsg":  fmt.Sprint(msgtext),
 			})
 			msg := tgbotapi.NewMessage(chatid, "Error sending message, checkout logs")
-			bot.Send(msg)
+			_, err = bot.Send(msg)
+			if err != nil {
+				logs.Errorf("Failed to send message %#v, the error is %#v", msg, err)
+			}
 		}
 	}
 
